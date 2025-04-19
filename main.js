@@ -1,41 +1,37 @@
 // main.js
 const fs = require('fs').promises;
 const path = require('path');
+const yargs = require('yargs/yargs');
+const { hideBin } = require('yargs/helpers');
 const { config, validateConfig } = require('./config');
-const { ask_cerebras } = require('./cerebras-module');
 const { ask_gemini } = require('./gemini-module');
-const { scrapeAndSave } = require('./scraper'); // Your Puppeteer scraper
+const { scrapeAndSave } = require('./scraper');
 const fetch = require('node-fetch');
+const cheerio = require('cheerio');
 
-// --- Helper Functions --- (Keep getCurrentDateFolder, setupDirectories, readSourceUrls, urlToFilename as before)
+// --- Helper Functions --- (getCurrentDateFolder, setupDirectories, readSourceUrls, fetchInitialHtml, urlToFilename remain the same)
 
-/** Gets current date as YYYY-MM-DD */
 function getCurrentDateFolder() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 }
 
-/** Creates directories and returns paths */
 async function setupDirectories(dateFolder, sourceName) {
-  const baseDir = config.scraper.outputBaseDir;
-  const runDir = path.join(baseDir, dateFolder, sourceName); // Add source name
-  const rawHtmlDir = path.join(runDir, 'raw_html');
-  const parsedTextDir = path.join(runDir, 'parsed_text');
-
-  await fs.mkdir(rawHtmlDir, { recursive: true }); // Creates runDir and sourceName dir too
-  await fs.mkdir(parsedTextDir, { recursive: true });
-
-  console.log(`🗂️ Output directories for ${sourceName} (${dateFolder}):`);
-  console.log(`   - Raw HTML: ${rawHtmlDir}`);
-  console.log(`   - Parsed Text: ${parsedTextDir}`);
-
-  return { runDir, rawHtmlDir, parsedTextDir };
+    const baseDir = config.scraper.outputBaseDir;
+    const runDir = path.join(baseDir, dateFolder, sourceName);
+    const rawHtmlDir = path.join(runDir, 'raw_html');
+    const parsedTextDir = path.join(runDir, 'parsed_text');
+    await fs.mkdir(rawHtmlDir, { recursive: true });
+    await fs.mkdir(parsedTextDir, { recursive: true });
+    console.log(`🗂️ Output directories for ${sourceName} (${dateFolder}):`);
+    console.log(`   - Raw HTML: ${rawHtmlDir}`);
+    console.log(`   - Parsed Text: ${parsedTextDir}`);
+    return { runDir, rawHtmlDir, parsedTextDir };
 }
 
-/** Reads URLs from the source list file */
 async function readSourceUrls() {
     try {
         const data = await fs.readFile(config.sourceListFile, 'utf8');
@@ -46,7 +42,6 @@ async function readSourceUrls() {
     }
 }
 
-/** Fetches initial HTML content from a URL */
 async function fetchInitialHtml(url) {
     try {
         console.log(`🌐 Fetching initial HTML source from: ${url}`);
@@ -61,22 +56,16 @@ async function fetchInitialHtml(url) {
     }
 }
 
-/** Creates a filesystem-safe filename from a URL */
 function urlToFilename(url, extension = '.html') {
     try {
         const parsedUrl = new URL(url);
-        let filename = parsedUrl.pathname;
-        filename = filename.replace(/^\/+|\/+$/g, '').replace(/\//g, '_');
+        let filename = parsedUrl.hostname + parsedUrl.pathname + (parsedUrl.search || '');
+        filename = filename.replace(/^\/+|\/+$/g, '').replace(/[\/\\]/g, '_');
+        filename = filename.replace(/[:*?"<>|]/g, '_');
         filename = filename.replace(/\.html$/i, '');
-        filename = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
-        filename = filename.substring(0, 100); // Keep truncation
-        // Prevent filenames starting with _ if path was just "/"
-        if (filename.startsWith('_') && filename.length > 1) {
-            filename = filename.substring(1);
-        }
-        if (!filename) { // Handle case where path was just "/" or invalid chars
-            filename = `index_${parsedUrl.hostname.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        }
+        filename = filename.substring(0, 180);
+        if (filename.startsWith('_') && filename.length > 1) filename = filename.substring(1);
+        if (!filename) filename = `index_${parsedUrl.hostname.replace(/[^a-zA-Z0-9]/g, '_')}`;
         return filename + extension;
     } catch (e) {
         return `invalid_url_${Date.now()}${extension}`;
@@ -84,132 +73,90 @@ function urlToFilename(url, extension = '.html') {
 }
 
 
-/** Extracts article URLs using Cerebras - UPDATED PROMPT */
+/** Extracts likely article URLs using Gemini */
 async function extractArticleUrls(sourceHtml, sourceUrl) {
-    // Increased length slightly for better context, adjust if needed
-    const snippetLength = 20000;
-    const prompt = `Analyze the following HTML source code from ${sourceUrl}. Your task is to extract *every single distinct* absolute URL that points to a primary news article published on www.nytimes.com.
+    let targetDomain = 'unknown';
+     try { targetDomain = new URL(sourceUrl).hostname; } catch {}
+    const prompt = `Analyze the following HTML source code from ${sourceUrl}. Extract *every single distinct* absolute URL that appears to be a link to a primary news article hosted on the domain '${targetDomain}' or its direct subdomains (like www.${targetDomain.replace(/^static\./,'')}).
 
 CRITICAL RULES:
-1. Output *only* the full, valid URLs, each on a new line.
-2. Ensure every URL starts with 'https://www.nytimes.com/'.
-3. The URL path should generally contain a date (e.g., '/YYYY/MM/DD/') and end with '.html'. Prioritize these.
-4. Identify URLs associated with main headlines, article teasers, and story links within the body of the email/page.
-5. **EXCLUDE ALL** of the following types of URLs:
-    - Section homepages (e.g., /section/world, /section/politics)
-    - Author pages (/by/)
-    - Interactive content (/interactive/)
-    - Video or slideshow pages (/video/, /slideshow/)
-    - Live blogs or updates (/live/)
-    - Subscription or account management links (/subscription, /account, /mem/email.html)
-    - Advertising links (check domains like nyt.com/adx, doubleclick.net, liveintent.com, etc., *even if within an 'a' tag*)
-    - Help pages, contact us, privacy policy, terms of service, app download links.
-    - Social media links (facebook.com, twitter.com, etc.)
-    - "View in browser" or unsubscribe links.
-    - Image source URLs (src attributes of img tags).
-    - Links pointing to nytimes.com itself but not to specific articles (e.g., just https://www.nytimes.com/).
-    - Any URL containing '/paidpost/'.
-    - Any URL clearly related to managing newsletter preferences.
-    - URLs with '/svc/messaging/' in the path.
+1. Output *ONLY* the full, valid URLs, each on a new line. NO extra text.
+2. URLs *MUST* start with 'http://' or 'https://' and target the specified domain or its 'www.' subdomain.
+3. Prioritize URLs linked from headlines, article summaries, or prominent story links.
+4. The URL path should look like it leads to specific content (e.g., contain multiple segments, end in .html, or include date patterns YYYY/MM/DD).
+5. **Strictly EXCLUDE ALL** URLs matching these patterns or types: section/category pages, author/tag pages, ads, trackers, login/subscription links, site navigation (header/footer), help/contact/policy pages, social media, multimedia galleries, email actions, file downloads, paid content sections, archive pages (unless linking to specific articles), /svc/messaging/, etc.
 
-List only the final, cleaned article URLs. Do not include duplicates.
+List only the valid, full article URLs, one per line. Preserve the original URL structure including query parameters.
 
-HTML Content Snippet (first ${snippetLength} chars):
+HTML Content:
 \`\`\`html
-${sourceHtml.substring(0, snippetLength)}
+${sourceHtml}
 \`\`\`
 Extracted Article URLs:`;
 
-    console.log("🧠 Asking Cerebras to extract ALL relevant article URLs...");
+    console.log(`🧠 Asking Gemini to extract URLs from ${sourceUrl} (Temp: 0.1)...`);
     try {
-        const response = await ask_cerebras(prompt, { maxTokens: 2048 }); // Generous token limit for potentially many URLs
-        if (!response) {
-            console.error("❌ Cerebras returned no response for URL extraction.");
-            return [];
-        }
+        const response = await ask_gemini(prompt, { temperature: 0.1 });
+        if (!response) { console.error("❌ Gemini returned no response for URL extraction."); return []; }
         const urls = response
-            .split(/[\r\n]+/) // Split by newline, handle different line endings
-            .map(line => {
-                // Attempt to clean potential markdown or extra characters
-                let cleanedLine = line.trim().replace(/^[-*]\s*/, ''); // Remove list markers
+            .split(/[\r\n]+/)
+            .map(line => line.trim().replace(/^[-*]\s*/, ''))
+            .filter(line => {
+                if (!line.startsWith('http')) return false;
                 try {
-                    // Validate and remove query/fragment
-                    const urlObj = new URL(cleanedLine);
-                    return `${urlObj.origin}${urlObj.pathname}`;
-                } catch {
-                    return null; // Invalid URL format
-                }
-            })
-            .filter(url =>
-                url && // Check if URL is valid after parsing
-                url.startsWith('https://www.nytimes.com/') &&
-                url.endsWith('.html') &&
-                !url.includes('/section/') &&
-                !url.includes('/by/') &&
-                !url.includes('/interactive/') &&
-                !url.includes('/video/') &&
-                !url.includes('/slideshow/') &&
-                !url.includes('/live/') &&
-                !url.includes('/svc/messaging') &&
-                !url.includes('/subscription') &&
-                !url.includes('/account') &&
-                !url.includes('mem/email.html') &&
-                !url.includes('/paidpost/') &&
-                 /\/(\d{4})\/(\d{2})\/(\d{2})\//.test(url) // Re-emphasize date pattern preference
-            );
-        const uniqueUrls = [...new Set(urls)]; // Remove duplicates
-        console.log(`📰 Extracted ${uniqueUrls.length} unique potential article URLs.`);
-        if (uniqueUrls.length < 5 && sourceUrl.includes('nytimes.com/email-content')) {
-             console.warn(`   ⚠️ Warning: Extracted fewer than 5 URLs from NYT email sample. Extraction might be incomplete.`);
+                    const parsed = new URL(line);
+                    const lineHostname = parsed.hostname;
+                    const baseTargetDomain = targetDomain.replace(/^www\.|^static\./g, '');
+                    const lineBaseDomain = lineHostname.replace(/^www\./g, '');
+                    const isTargetDomain = lineHostname === targetDomain || lineBaseDomain === baseTargetDomain || `www.${lineBaseDomain}` === targetDomain;
+                    const path = parsed.pathname;
+                    const isLikelyArticlePath = path.length > 1 && !path.endsWith('/') && (path.includes('.html') || path.split('/').length > 2);
+                    const isExcludedPath = /^\/(section|category|politics|business|technology|arts|opinion|world|us|nyregion|food|well|travel|realestate|fashion|obituaries|by|author|tag|topic|interactive|video|slideshow|live|gallery|audio|paidpost|sponsor-content|svc\/messaging|login|account|subscribe|subscription|register|help|contact|about|privacy|terms|rss|apps)\b/i.test(path) || /\.(jpg|png|gif|css|js|pdf|xml|ico)$/i.test(path) || path.includes('mem/email.html') || path.includes('/adx/');
+                    const isAdParam = /[?&](utm_|ad|cid|trk|campaign|promo|src)=/i.test(parsed.search);
+                    return isTargetDomain && isLikelyArticlePath && !isExcludedPath && !isAdParam;
+                } catch { return false; }
+            });
+        const uniqueUrls = [...new Set(urls)];
+        console.log(`📰 Extracted ${uniqueUrls.length} unique potential article URLs for ${targetDomain}.`);
+        if (uniqueUrls.length > 0) {
+            console.log("--- Extracted URLs ---");
+            uniqueUrls.forEach(url => console.log(url));
+            console.log("----------------------");
+        } else {
+            console.log("   (Gemini did not return any valid-looking URLs after filtering)");
         }
-        // console.log('   Extracted URLs:', uniqueUrls); // Uncomment for debugging
         return uniqueUrls;
     } catch (error) {
-        console.error(`❌ Error during URL extraction with Cerebras: ${error.message}`);
+        console.error(`❌ Error during URL extraction with Gemini: ${error.message}`);
         return [];
     }
 }
 
-/** Extracts text content using Cerebras - UPDATED PROMPT FOR VERBATIM */
+
+/** Extracts verbatim text content using Gemini */
 async function extractTextFromHtml(rawHtmlFilePath, parsedTextFilePath) {
     console.log(`📄 Reading raw HTML for text extraction: ${path.basename(rawHtmlFilePath)}`);
     try {
         const rawHtml = await fs.readFile(rawHtmlFilePath, 'utf8');
-        // Limit input size to manage API costs/limits if necessary, but try to send a good chunk
-        const snippetLength = 30000; // Send more HTML for better context
-        const prompt = `Your task is to extract the *complete and verbatim textual content* of the main news article body from the following HTML source code. Reproduce the text exactly as it appears in the article's primary paragraphs.
+        const prompt = `Your primary goal is to extract the *complete and verbatim textual content* of the main news article body from the following HTML source code. Reproduce the text exactly as it appears in the article's primary paragraphs.
 
 CRITICAL INSTRUCTIONS:
 1.  **Output ONLY the plain text** of the article's core narrative content.
 2.  **DO NOT SUMMARIZE, PARAPHRASE, REPHRASE, or CHANGE** any of the original article wording.
-3.  **Extract the FULL text** of the main article body, including all paragraphs belonging to the story.
-4.  **Strictly EXCLUDE ALL** of the following elements:
-    *   HTML tags (e.g., <p>, <div>, <a>, <img>, <script>, <style>).
-    *   Headlines, titles, subheadings.
-    *   Author names, bylines, affiliations, publication dates, timestamps.
-    *   Website navigation menus (header, footer, sidebars).
-    *   Advertisements, "suggested content," "related articles," "read more" links/sections.
-    *   Image captions, photo credits, figure descriptions, video player text/controls.
-    *   Comment sections and associated metadata.
-    *   Social media sharing buttons/links.
-    *   Subscription prompts or paywall messages.
-    *   Lists of contents or jump links.
-    *   Legal notices, copyright statements, terms of service, privacy policy links.
-    *   Any non-prose elements like tables unless they are integral to the narrative flow (rare).
-5.  Format the output as clean paragraphs separated by double newlines (\n\n). Preserve the original paragraph breaks from the article body.
+3.  **Extract the FULL text** of the main article body. Preserve original paragraph breaks (\n\n).
+4.  **Strictly EXCLUDE ALL** non-article text and metadata: HTML tags, headlines, subheadings, bylines, dates, navigation, ads, related links, captions, comments, social media buttons, legal notices, scripts, styles, etc.
+5.  Focus solely on the narrative content.
 
-HTML Content Snippet (first ${snippetLength} chars):
+HTML Content:
 \`\`\`html
-${rawHtml.substring(0, snippetLength)}
+${rawHtml}
 \`\`\`
 Verbatim Extracted Article Text:`;
 
-        console.log(`🧠 Asking Cerebras for *verbatim* text extraction: ${path.basename(rawHtmlFilePath)}`);
-        // Increase maxTokens significantly for full article text
-        const extractedText = await ask_cerebras(prompt, { maxTokens: 4096 });
-
-        if (!extractedText || extractedText.trim().length < 150) { // Slightly higher threshold for verbatim
-            console.warn(`⚠️ Cerebras returned insufficient verbatim text for ${path.basename(rawHtmlFilePath)}. Skipping.`);
+        console.log(`🧠 Asking Gemini for *verbatim* text extraction: ${path.basename(rawHtmlFilePath)} (Temp: 0.1)...`);
+        const extractedText = await ask_gemini(prompt, { temperature: 0.1 });
+        if (!extractedText || extractedText.trim().length === 0) {
+            console.warn(`⚠️ Gemini returned empty text for ${path.basename(rawHtmlFilePath)}. Skipping.`);
             return null;
         }
         const cleanedText = extractedText.trim();
@@ -222,48 +169,16 @@ Verbatim Extracted Article Text:`;
     }
 }
 
-/** Generates newsletter using Gemini - UPDATED PROMPT */
-async function generateNewsletter(articlesData, outputPath) {
-    console.log(`\n💡 Aggregating content from ${articlesData.length} articles for Gemini newsletter...`);
 
-    let combinedContent = "Analyze the following news articles provided below, identified by their headlines and content, to generate a comprehensive daily news digest.\n\n";
+/** Generates the objective newsletter digest using Gemini */
+async function generateNewsletterDigest(articlesData, outputPath, geminiModelOverride = null) {
+    console.log(`\n💡 Aggregating content from ${articlesData.length} articles for Gemini DIGEST...`);
+    let combinedContent = "Analyze the following news articles provided below, identified by their derived headlines and content, to generate a comprehensive daily news digest.\n\n";
     let currentLength = combinedContent.length;
     let includedCount = 0;
 
     for (const article of articlesData) {
-        let headline = `Article from ${article.url}`; // Default
-        try {
-            const rawHtml = await fs.readFile(article.rawHtmlPath, 'utf8');
-             // Use cheerio for more reliable title extraction
-             const $ = require('cheerio').load(rawHtml);
-             let potentialTitle = $('head title').first().text();
-
-            if (potentialTitle) {
-                 // Improved title cleaning
-                 potentialTitle = potentialTitle
-                     .replace(/\| The New York Times$/i, '')
-                     .replace(/ - The New York Times$/i, '')
-                     .replace(/ - NYTimes.com$/i, '')
-                     .replace(/ \| NYT$/i, '')
-                     .replace(/ - NYT$/i, '')
-                     .replace(/^The New York Times: /i, '')
-                     .replace(/New York Times/, '') // Consider case-insensitive replace if needed
-                     .replace(/The New York Times/, '')
-                     .trim();
-                 // Avoid using generic titles
-                 if (potentialTitle && !potentialTitle.toLowerCase().includes('headlines') && potentialTitle.length > 10) {
-                    headline = potentialTitle;
-                 } else {
-                     // Fallback: Try to get the first H1 if title is bad
-                     const h1Text = $('h1').first().text().trim();
-                     if (h1Text && h1Text.length > 10) {
-                         headline = h1Text;
-                     }
-                 }
-            }
-        } catch (e) { console.warn(`   Could not read/parse raw HTML for headline: ${path.basename(article.rawHtmlPath)}`); }
-
-        // Ensure text is not null or undefined before calculating length
+         let headline = article.headline || `Article from ${article.url}`; // Use pre-derived headline
         const articleTextContent = article.text || '';
         const articleEntry = `--- ARTICLE START ---\nHeadline: ${headline}\nURL: ${article.url}\n\nContent:\n${articleTextContent}\n--- ARTICLE END ---\n\n`;
         const entryLength = articleEntry.length;
@@ -273,8 +188,7 @@ async function generateNewsletter(articlesData, outputPath) {
             currentLength += entryLength;
             includedCount++;
         } else {
-            console.warn(`   ⚠️ Truncating input for Gemini. Skipping article: ${headline.substring(0,50)}... due to length limits.`);
-            // Optionally add just the headline if space allows
+            console.warn(`   ⚠️ Truncating input for Gemini digest. Skipping article: ${headline.substring(0,50)}... due to length limits.`);
              const headlineEntry = `--- ARTICLE START ---\nHeadline: ${headline}\nURL: ${article.url}\n\nContent: [Content truncated due to length limits]\n--- ARTICLE END ---\n\n`;
              if (currentLength + headlineEntry.length <= config.maxArticleContentLengthForGemini) {
                 combinedContent += headlineEntry;
@@ -283,173 +197,344 @@ async function generateNewsletter(articlesData, outputPath) {
         }
     }
 
-    if (includedCount === 0) {
-        console.error("❌ No article content could be included for Gemini analysis.");
-        return;
-    }
+    if (includedCount === 0) { console.error("❌ No article content for Gemini digest."); return; }
+    console.log(`   Aggregated content from ${includedCount} articles (${currentLength} chars) for Gemini digest.`);
 
-    console.log(`   Aggregated content from ${includedCount} articles (${currentLength} chars) for Gemini.`);
+    // Objective Digest Prompt (from previous steps)
+    const prompt = `You are a neutral, objective news analyst. Synthesize the provided collection of news articles (separated by '--- ARTICLE START ---' and '--- ARTICLE END ---', including their headlines and verbatim content) into a comprehensive daily newsletter digest.
 
-    // Refined Gemini Prompt
-    const prompt = `Act as a neutral, objective news analyst. Synthesize the provided collection of news articles (separated by '--- ARTICLE START ---' and '--- ARTICLE END ---', including their headlines and verbatim content) into a comprehensive daily newsletter digest.
-
-**Newsletter Structure and Content Requirements:**
-
-1.  **Overall Summary (Required):**
-    *   Start with a concise (2-4 sentences) and strictly objective overview of the most significant events reported across *all* the provided articles. Do not add information not present in the texts.
-
-2.  **Key Story Summaries (Required):**
-    *   Identify the main news stories presented.
-    *   Group related stories under thematic headings (e.g., ## Politics, ## World News, ## Business, ## Technology, ## Arts & Culture, ## Local News). Use judgment to create relevant categories based on the articles.
-    *   For each story, provide a brief, factual summary (3-6 sentences) based *only* on the provided text. Use the corresponding headline provided for each article.
-
-3.  **Key Facts (Required):**
-    *   Under a heading ## Key Facts Reported, list 3-5 distinct, verifiable facts presented in the articles using bullet points. Cite the source headline briefly in parentheses if helpful (e.g., "- Fact statement (Headline: ...)")
-
-4.  **Narrative Analysis (Required):**
-    *   Under a heading ## Narrative Analysis, briefly (2-4 sentences) and neutrally discuss any recurring themes, dominant perspectives, potential biases, or differing angles observed *across* the provided articles. Focus on *how* the news is presented, not your opinion of it. For example: "Reporting on X focused heavily on Y, while coverage of Z highlighted Q." or "Multiple articles address the theme of Y, presenting differing viewpoints on its cause."
-
-5.  **Analyst's Note (Optional, Max 1):**
-    *   If there is a particularly complex or significant story, you *may* add *one* short (1-2 sentences) section labeled ## Analyst's Note.
-    *   This note should provide brief, neutral context or potential implications derived *logically* from the reported facts.
-    *   **Crucially, DO NOT express personal opinions, make predictions, or introduce external information not found in the provided texts.** If unsure, omit this section.
+Format Requirements:
+1.  **Overall Summary (Required):** Start with a brief (2-4 sentence) objective summary of the day's most significant news based *only* on the provided articles.
+2.  **Key Story Summaries (Required):** Create sections for major themes (e.g., ## Politics, ## World News, ## Business). Under each theme, provide concise, factual summaries (3-6 sentences) of the relevant articles. Use the corresponding headline provided for each article.
+3.  **Key Facts (Required):** List 3-5 bullet points highlighting verifiable facts reported across the articles under a heading \`## Key Facts Reported\`. Cite the source headline briefly in parentheses if helpful (e.g., "- Fact statement (Headline: ...)")
+4.  **Narrative Analysis (Required):** Briefly (2-4 sentences) and neutrally discuss any overarching narratives, dominant perspectives, or potential points of contention observed *across* the provided articles under a heading \`## Narrative Analysis\`. Focus on *how* the news is presented.
+5.  **Analyst's Note (Optional, Max 1):** If there is a particularly complex or significant story, you *may* add *one* short (1-2 sentences) section labeled \`## Analyst's Note\`. Provide brief, neutral context or potential implications derived *logically* from reported facts. **Do not express personal opinions or predictions.** Omit if unsure.
 
 **Input Articles:**
 ${combinedContent}`;
 
-
-    console.log("🤖 Asking Gemini to generate the daily newsletter...");
+    const modelToUse = geminiModelOverride || config.gemini.model;
+    console.log(`🤖 Asking Gemini (${modelToUse}) to generate the objective newsletter digest...`);
     try {
-        const newsletterContent = await ask_gemini(prompt, {
-            temperature: config.gemini.temperature
-        });
-        if (!newsletterContent) {
-            console.error("❌ Gemini returned no response for newsletter generation.");
-            return;
-        }
-
-        // Basic cleanup of potential Gemini artifacts if needed
+        const newsletterContent = await ask_gemini(prompt, { model: modelToUse, temperature: config.gemini.temperature }); // Use default generation temp
+        if (!newsletterContent) { console.error(`❌ Gemini (${modelToUse}) returned no response for digest.`); return; }
         const cleanedNewsletter = newsletterContent.replace(/```markdown\n?/, '').replace(/```$/, '').trim();
-
         await fs.writeFile(outputPath, cleanedNewsletter, 'utf8');
-        console.log(`✅📰 Daily newsletter saved: ${path.basename(outputPath)}`);
+        console.log(`✅📰 Objective digest saved: ${path.basename(outputPath)}`);
     } catch (error) {
-        console.error(`❌ Error during newsletter generation with Gemini: ${error.message}`);
-        // console.error(error.stack); // Uncomment for detailed stack trace
+        console.error(`❌ Error generating digest with Gemini (${modelToUse}): ${error.message}`);
     }
 }
 
 
-// --- Main Execution ---
-async function main() {
-  console.log("--- Starting Daily News Analysis Workflow ---");
+/** Generates the analytical essay using Gemini - Includes Headline Derivation */
+async function generateAnalyticalEssay(articlesData, outputPath, geminiModelOverride = null) {
+    console.log(`\n💡 Aggregating content from ${articlesData.length} articles for Gemini ESSAY...`);
+    let combinedContent = "Below is a collection of news articles from today. Each article includes its URL and verbatim text content, separated by '--- ARTICLE START ---' and '--- ARTICLE END ---'. Analyze this content to write your essay.\n\n";
+    let currentLength = combinedContent.length;
+    let includedCount = 0;
 
-  if (!validateConfig()) {
-    process.exit(1);
-  }
+    for (const article of articlesData) {
+        const articleTextContent = article.text || '';
+        // NOTE: We no longer pre-fetch headlines here; the prompt asks Gemini to derive them.
+        const articleEntry = `--- ARTICLE START ---\nURL: ${article.url}\n\nContent:\n${articleTextContent}\n--- ARTICLE END ---\n\n`;
+        const entryLength = articleEntry.length;
 
-  const dateFolder = getCurrentDateFolder();
-  const sourceUrlsFromFile = await readSourceUrls();
-  const allArticlesData = []; // Collect data from all sources
+        if (currentLength + entryLength <= config.maxArticleContentLengthForGemini) {
+            combinedContent += articleEntry;
+            currentLength += entryLength;
+            includedCount++;
+        } else {
+            console.warn(`   ⚠️ Truncating input for Gemini essay. Skipping article from ${article.url.substring(0, 50)}... due to length limits.`);
+            const headlineEntry = `--- ARTICLE START ---\nURL: ${article.url}\n\nContent: [Content truncated due to length limits]\n--- ARTICLE END ---\n\n`;
+             if (currentLength + headlineEntry.length <= config.maxArticleContentLengthForGemini) {
+                combinedContent += headlineEntry;
+                currentLength += headlineEntry.length;
+             }
+        }
+    }
 
-  for (const sourceUrl of sourceUrlsFromFile) {
-    console.log(`\nProcessing Source URL: ${sourceUrl}`);
-    let sourceHtml;
-    let sourceName = 'unknown_source';
+    if (includedCount === 0) { console.error("❌ No article content for Gemini essay."); return; }
+    console.log(`   Aggregated content from ${includedCount} articles (${currentLength} chars) for Gemini essay.`);
+
+    // Essay Prompt (asking Gemini to derive headlines)
+    const prompt = `You are a sophisticated news analyst and critical thinker with a distinct, engaging writing style. Based *only* on the collection of news articles provided below (delimited by '--- ARTICLE START ---' and '--- ARTICLE END ---', including their URLs and verbatim content), write a thoughtful analytical essay (approximately 500-1000 words). Your essay should critically respond to the key themes, events, and narratives presented, similar in depth and style to insightful editorial pieces.
+
+Your essay should:
+1.  **Identify and Introduce Themes:** Begin by identifying the most significant overarching theme(s) or critical event(s) emerging from the collective articles. Introduce your central argument or perspective on these themes.
+2.  **Synthesize and Analyze:**
+    *   Weave together information from different articles to support your analysis of the main themes. Discuss connections, contradictions, or different facets of the issues presented.
+    *   Analyze the underlying narratives, potential implications, or unstated assumptions within the reporting. Go beyond surface-level summarization.
+    *   **Derive and integrate concise headlines** for the articles you discuss to provide context for the reader, mentioning them naturally within your prose (e.g., "Reporting on the situation in Yemen, under the likely headline 'US Airstrikes Kill Dozens,' reveals...").
+3.  **Offer Critical Perspective & Nuance:**
+    *   Explore the complexities, ambiguities, or broader significance of the events *as suggested by the combined information in the texts*.
+    *   Raise insightful questions or highlight tensions evident from the reporting.
+    *   You may adopt a slightly more editorial or interpretive stance than a purely objective summary, but all points *must* be grounded in and logically derived from the provided article content. **Do not introduce external facts or opinions.**
+4.  **Structure and Style:** Organize your thoughts into a coherent essay with a clear introduction, well-developed body paragraphs, and a strong conclusion. Employ sophisticated language and varied sentence structure.
+5.  **Conclusion:** Synthesize your main analytical points and offer a final reflection on the significance of the day's news *as depicted in this collection*.
+
+**Source Articles:**
+${combinedContent}`;
+
+    const modelToUse = geminiModelOverride || config.gemini.model;
+    console.log(`✍️ Asking Gemini (${modelToUse}) to generate the analytical essay...`);
+    try {
+        const essayContent = await ask_gemini(prompt, { model: modelToUse, temperature: config.gemini.temperature });
+        if (!essayContent) { console.error(`❌ Gemini (${modelToUse}) returned no response for essay.`); return; }
+        const cleanedEssay = essayContent.replace(/```markdown\n?/, '').replace(/```$/, '').trim();
+        await fs.writeFile(outputPath, cleanedEssay, 'utf8');
+        console.log(`✅✍️ Analytical essay saved: ${path.basename(outputPath)}`);
+    } catch (error) {
+        console.error(`❌ Error generating essay with Gemini (${modelToUse}): ${error.message}`);
+    }
+}
+
+
+// --- Function for Re-running Analysis ---
+/**
+ * Reads parsed text files from a specific directory and generates the selected analysis type.
+ * @param {string} targetDirPath - Path to the source-specific date directory.
+ * @param {'digest'|'essay'|'both'} analysisType - Type of analysis to generate.
+ * @param {string|null} geminiModelOverride - Optional Gemini model name.
+ */
+async function generateAnalysisForDirectory(targetDirPath, analysisType = 'digest', geminiModelOverride = null) {
+    console.log(`\n--- Rerunning Analysis for Directory: ${targetDirPath} ---`);
+    console.log(`   Analysis Type: ${analysisType}`);
+    if (geminiModelOverride) {
+        console.log(`   Using specified Gemini model: ${geminiModelOverride}`);
+    }
+
+    const parsedTextDir = path.join(targetDirPath, 'parsed_text');
+    const rawHtmlDir = path.join(targetDirPath, 'raw_html'); // Still useful for context/URLs
 
     try {
-        const parsedSourceUrl = new URL(sourceUrl);
-        const hostname = parsedSourceUrl.hostname;
-        sourceName = config.sourceMapping[hostname] || hostname.replace(/^www\./, '').split('.')[0];
-        console.log(`   Identified Source Name: ${sourceName}`);
-    } catch (e) {
-        console.error(`   Skipping invalid URL in urls.txt: ${sourceUrl}`);
-        continue;
-    }
+        await fs.access(parsedTextDir);
+        const textFiles = await fs.readdir(parsedTextDir);
+        const txtFileNames = textFiles.filter(f => f.endsWith('.txt'));
 
-    const { runDir, rawHtmlDir, parsedTextDir } = await setupDirectories(dateFolder, sourceName);
+        if (txtFileNames.length === 0) {
+            console.log(`🚫 No parsed text files found in ${parsedTextDir}.`);
+            return;
+        }
 
-    // --- Step 1: Get Initial HTML & Extract Article URLs ---
-    console.log("--- Step 1: Fetching Source & Extracting Article URLs ---");
-    sourceHtml = await fetchInitialHtml(sourceUrl);
-    if (!sourceHtml) {
-        console.warn(`   Skipping source ${sourceName} due to fetch error.`);
-        continue;
-    }
+        console.log(`   Found ${txtFileNames.length} parsed text files.`);
+        const articlesData = [];
 
-    const articleUrls = await extractArticleUrls(sourceHtml, sourceUrl);
-    if (articleUrls.length === 0) {
-        console.log(`   No article URLs extracted for ${sourceName}.`);
-        continue;
-    }
+        for (const txtFileName of txtFileNames) {
+            const baseName = path.basename(txtFileName, '.txt');
+            const txtFilePath = path.join(parsedTextDir, txtFileName);
+             // Include raw HTML path for potential future use or headline hints
+             const correspondingHtmlPath = path.join(rawHtmlDir, `${baseName}.html`);
+             const htmlExists = await fs.access(correspondingHtmlPath).then(() => true).catch(() => false);
 
-    // --- Step 2: Scrape each article URL ---
-    const scrapedArticlePaths = [];
-    console.log(`\n--- Step 2: Scraping ${articleUrls.length} Articles for ${sourceName} ---`);
-    let scrapeCounter = 0;
-    for (const url of articleUrls) {
-        scrapeCounter++;
-        console.log(`   Scraping article ${scrapeCounter}/${articleUrls.length}: ${url}`);
-        const rawHtmlFileName = urlToFilename(url, '.html');
-        const rawHtmlFilePath = path.join(rawHtmlDir, rawHtmlFileName);
+            try {
+                const textContent = await fs.readFile(txtFilePath, 'utf8');
+                articlesData.push({
+                    url: `(source_file: ${baseName}.txt)`, // More informative placeholder
+                    text: textContent,
+                    rawHtmlPath: htmlExists ? correspondingHtmlPath : null // Pass if exists
+                });
+            } catch (readError) {
+                console.warn(`   ⚠️ Skipping: Could not read text file "${txtFileName}". Error: ${readError.message}`);
+            }
+        }
 
-        const success = await scrapeAndSave(url, rawHtmlFilePath);
-        if (success) {
-            scrapedArticlePaths.push({ url, rawHtmlPath: rawHtmlFilePath });
+        if (articlesData.length > 0) {
+            const dirBaseName = path.basename(targetDirPath); // e.g., 'nytimes_email'
+            const datePart = path.basename(path.dirname(targetDirPath)); // e.g., '2025-04-19'
+            const modelSuffix = geminiModelOverride ? geminiModelOverride.replace(/[^a-zA-Z0-9]/g,'_') : 'default';
+
+            // Generate Digest if requested
+            if (analysisType === 'digest' || analysisType === 'both') {
+                const digestFileName = `digest_${dirBaseName}_${datePart}_${modelSuffix}_${Date.now()}.md`;
+                const digestOutputPath = path.join(targetDirPath, digestFileName);
+                await generateNewsletterDigest(articlesData, digestOutputPath, geminiModelOverride);
+            }
+
+            // Generate Essay if requested
+            if (analysisType === 'essay' || analysisType === 'both') {
+                const essayFileName = `essay_${dirBaseName}_${datePart}_${modelSuffix}_${Date.now()}.md`;
+                const essayOutputPath = path.join(targetDirPath, essayFileName);
+                await generateAnalysisEssay(articlesData, essayOutputPath, geminiModelOverride);
+            }
         } else {
-            console.warn(`   Failed to scrape: ${url}`);
+            console.log("🚫 No valid article data loaded for re-analysis.");
         }
-        if (scrapeCounter < articleUrls.length) {
-            console.log(`   Waiting ${config.processingDelayMs / 1000}s before next scrape...`);
-            await new Promise(resolve => setTimeout(resolve, config.processingDelayMs));
-        }
-    }
 
-    if (scrapedArticlePaths.length === 0) {
-      console.log(`🚫 No articles successfully scraped for ${sourceName}.`);
-      continue;
-    }
-
-    // --- Step 3: Extract text from scraped HTML ---
-    console.log(`\n--- Step 3: Extracting Text from ${scrapedArticlePaths.length} Scraped Articles (${sourceName}) ---`);
-    let extractionCounter = 0;
-    for (const article of scrapedArticlePaths) {
-        extractionCounter++;
-        console.log(`   Extracting text ${extractionCounter}/${scrapedArticlePaths.length}: ${path.basename(article.rawHtmlPath)}`);
-        const baseName = path.basename(article.rawHtmlPath, '.html');
-        const parsedTextFilePath = path.join(parsedTextDir, `${baseName}.txt`);
-
-        const extractedText = await extractTextFromHtml(article.rawHtmlPath, parsedTextFilePath);
-        if (extractedText) {
-            allArticlesData.push({ // Add to the global list
-                url: article.url,
-                text: extractedText,
-                rawHtmlPath: article.rawHtmlPath,
-                source: sourceName // Add source info if needed later
-            });
-        }
-        // Shorter delay for CPU-bound tasks potentially
-        if (extractionCounter < scrapedArticlePaths.length) {
-            console.log(`   Waiting ${config.processingDelayMs / 1000 / 2}s before next extraction...`);
-             await new Promise(resolve => setTimeout(resolve, config.processingDelayMs / 2));
+    } catch (error) {
+        console.error(`❌ Error processing directory ${targetDirPath}: ${error.message}`);
+        if (error.code === 'ENOENT') {
+            console.error(`   Ensure the directory exists and contains 'parsed_text' subdirectory.`);
         }
     }
-  } // End loop through source URLs
+}
 
-  // --- Step 4: Generate the final newsletter ---
-  if (allArticlesData.length > 0) {
-    console.log(`\n--- Step 4: Generating Final Newsletter from ${allArticlesData.length} Processed Articles ---`);
-    const baseRunDir = path.join(config.scraper.outputBaseDir, dateFolder); // Use base date folder
-    // Ensure base date directory exists if no sources were successfully processed to this point but we still want to note it
-    await fs.mkdir(baseRunDir, { recursive: true });
-    const newsletterFileName = `daily_newsletter_${dateFolder}.md`;
-    const newsletterOutputPath = path.join(baseRunDir, newsletterFileName);
-    await generateNewsletter(allArticlesData, newsletterOutputPath);
-  } else {
-    console.log("\n🚫 No articles processed successfully across all sources. Final newsletter not generated.");
-  }
 
-  console.log("\n--- Workflow Complete ---");
+// --- Main Execution Logic ---
+async function main() {
+    // --- Command Line Argument Parsing ---
+    const argv = yargs(hideBin(process.argv))
+        .option('analyze-only', {
+            alias: 'a',
+            type: 'boolean',
+            description: 'Only run analysis generation on an existing directory. Requires -d.',
+            default: false
+        })
+        .option('directory', {
+            alias: 'd',
+            type: 'string',
+            description: 'Path to the *source-specific* date directory (e.g., ./daily_news_data/YYYY-MM-DD/source_name) for --analyze-only mode.',
+            implies: 'analyze-only' // Require -d if -a is used
+        })
+         .option('type', {
+            alias: 't',
+            type: 'string',
+            choices: ['digest', 'essay', 'both'],
+            description: 'Type of analysis to generate in analyze-only mode (or for full run).',
+            default: 'both' // Default to generating both in full run
+        })
+        .option('model', {
+            alias: 'm',
+            type: 'string',
+            description: `Override the default Gemini model for analysis generation (e.g., ${config.gemini.model}).`
+        })
+        .help()
+        .alias('help', 'h')
+        .argv;
+
+    console.log("--- Starting Daily News Workflow (Gemini Only - Simplified Parsing) ---");
+
+    if (!validateConfig()) {
+        process.exit(1);
+    }
+
+    // --- Re-run Mode ---
+    if (argv.analyzeOnly) {
+        if (!argv.directory) { // yargs 'implies' should catch this, but double-check
+            console.error("❌ Error: --directory (-d) argument is required when using --analyze-only.");
+            process.exit(1);
+        }
+        const potentialPath = path.resolve(argv.directory);
+        console.log(`▶️ Re-run Analysis Mode`);
+        console.log(`   Target directory: ${potentialPath}`);
+        console.log(`   Analysis Type: ${argv.type}`);
+        if (argv.model) console.log(`   Using Model: ${argv.model}`);
+
+        try {
+            const stats = await fs.stat(potentialPath);
+            if (stats.isDirectory()) {
+                const resolvedBaseDir = path.resolve(config.scraper.outputBaseDir);
+                if (potentialPath.startsWith(resolvedBaseDir) && potentialPath.includes(path.sep)) { // Basic check it's a subdir
+                    await generateAnalysisForDirectory(potentialPath, argv.type, argv.model || null);
+                } else {
+                    console.error(`❌ Error: Path "${potentialPath}" is not a valid subdirectory within "${resolvedBaseDir}". Expected format: ${path.join(resolvedBaseDir, 'YYYY-MM-DD', 'source_name')}`);
+                }
+            } else {
+                console.error(`❌ Error: Path "${potentialPath}" is not a directory.`);
+            }
+        } catch (error) {
+             if (error.code === 'ENOENT') { console.error(`❌ Error: Directory "${potentialPath}" does not exist.`); }
+             else { console.error(`❌ Error accessing directory "${potentialPath}": ${error.message}`); }
+        }
+        console.log("\n--- Re-run Analysis Complete ---");
+        return; // Exit after re-run
+    }
+
+    // --- Full Scrape and Analysis Workflow ---
+    console.log("▶️ Running Full Scrape and Analysis Workflow...");
+    console.log(`   Generating analysis type(s): ${argv.type}`);
+    if (argv.model) console.log(`   (Using specified model for final analysis: ${argv.model})`);
+
+
+    const dateFolder = getCurrentDateFolder();
+    const sourceUrlsFromFile = await readSourceUrls();
+    const allArticlesData = []; // Aggregate data across all sources
+
+    for (const sourceUrl of sourceUrlsFromFile) {
+        console.log(`\n>>> Processing Source URL: ${sourceUrl}`);
+        let sourceHtml;
+        let sourceName = 'unknown_source';
+        try {
+            const parsedSourceUrl = new URL(sourceUrl);
+            const hostname = parsedSourceUrl.hostname;
+            sourceName = config.sourceMapping[hostname] || hostname.replace(/^www\.|^static\./g, '').split('.')[0];
+            console.log(`   Source Identifier: ${sourceName}`);
+        } catch (e) { console.error(`   Skipping invalid URL: ${sourceUrl}`); continue; }
+
+        const { runDir, rawHtmlDir, parsedTextDir } = await setupDirectories(dateFolder, sourceName);
+
+        console.log("\n--- Step 1: Fetching Source & Extracting Article URLs ---");
+        sourceHtml = await fetchInitialHtml(sourceUrl);
+        if (!sourceHtml) { console.warn(`   Skipping ${sourceName}: fetch error.`); continue; }
+
+        const articleUrls = await extractArticleUrls(sourceHtml, sourceUrl); // Uses Gemini
+        if (articleUrls.length === 0) { console.log(`   No article URLs extracted for ${sourceName}.`); continue; }
+
+        console.log(`\n--- Step 2: Scraping ${articleUrls.length} Articles for ${sourceName} ---`);
+        const scrapedArticlePaths = []; // Track successful scrapes for this source
+        let scrapeCounter = 0;
+        for (const url of articleUrls) {
+            scrapeCounter++;
+            console.log(`   Scraping ${scrapeCounter}/${articleUrls.length}: ${url.substring(0, 80)}...`);
+            const rawHtmlFileName = urlToFilename(url, '.html');
+            const rawHtmlFilePath = path.join(rawHtmlDir, rawHtmlFileName);
+            const success = await scrapeAndSave(url, rawHtmlFilePath);
+            if (success) { scrapedArticlePaths.push({ url, rawHtmlPath: rawHtmlFilePath }); }
+            else { console.warn(`   Failed to scrape: ${url}`); }
+            if (scrapeCounter < articleUrls.length) {
+                 console.log(`   Waiting ${config.processingDelayMs / 1000}s...`);
+                 await new Promise(resolve => setTimeout(resolve, config.processingDelayMs));
+            }
+        }
+
+        if (scrapedArticlePaths.length === 0) { console.log(`🚫 No articles successfully scraped for ${sourceName}.`); continue; }
+
+        console.log(`\n--- Step 3: Extracting Verbatim Text from ${scrapedArticlePaths.length} Scraped Articles (${sourceName}) ---`);
+        let extractionCounter = 0;
+        for (const article of scrapedArticlePaths) {
+            extractionCounter++;
+            console.log(`   Extracting text ${extractionCounter}/${scrapedArticlePaths.length}: ${path.basename(article.rawHtmlPath)}`);
+            const baseName = path.basename(article.rawHtmlPath, '.html');
+            const parsedTextFilePath = path.join(parsedTextDir, `${baseName}.txt`);
+            const extractedText = await extractTextFromHtml(article.rawHtmlPath, parsedTextFilePath); // Uses Gemini
+            if (extractedText) {
+                // Add to the main list for combined analysis later
+                allArticlesData.push({ url: article.url, text: extractedText, rawHtmlPath: article.rawHtmlPath, source: sourceName });
+            }
+            if (extractionCounter < scrapedArticlePaths.length) {
+                 console.log(`   Waiting ${config.processingDelayMs / 1000 / 2}s...`);
+                 await new Promise(resolve => setTimeout(resolve, config.processingDelayMs / 2));
+            }
+        }
+    } // End loop through source URLs
+
+    // --- Step 4: Generate the final outputs (Digest and/or Essay) ---
+    if (allArticlesData.length > 0) {
+        console.log(`\n--- Step 4: Generating Final Analysis from ${allArticlesData.length} Processed Articles ---`);
+        const baseRunDir = path.join(config.scraper.outputBaseDir, dateFolder); // Base date folder for outputs
+        await fs.mkdir(baseRunDir, { recursive: true }); // Ensure it exists
+
+        const modelUsedSuffix = argv.model ? argv.model.replace(/[^a-zA-Z0-9]/g,'_') : 'default';
+
+        // Generate Digest if requested (or default 'both')
+        if (argv.type === 'digest' || argv.type === 'both') {
+            const digestFileName = `daily_digest_${dateFolder}_${modelUsedSuffix}.md`;
+            const digestOutputPath = path.join(baseRunDir, digestFileName);
+            await generateNewsletterDigest(allArticlesData, digestOutputPath, argv.model || null);
+        }
+
+        // Generate Essay if requested (or default 'both')
+        if (argv.type === 'essay' || argv.type === 'both') {
+            const essayFileName = `analysis_essay_${dateFolder}_${modelUsedSuffix}.md`;
+            const essayOutputPath = path.join(baseRunDir, essayFileName);
+            await generateAnalysisEssay(allArticlesData, essayOutputPath, argv.model || null);
+        }
+
+    } else {
+        console.log("\n🚫 No articles processed successfully. No final analysis generated.");
+    }
+
+    console.log("\n--- Workflow Complete ---");
 }
 
 // Run the main function
