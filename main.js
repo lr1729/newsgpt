@@ -7,8 +7,31 @@ const { config, validateConfig } = require('./config'); // Ensure config.js is u
 const { ask_gemini } = require('./gemini-module'); // Ensure gemini-module.js has retry logic
 // Ensure scraper.js exports both scrapeAndSave and scrapeAndGetContent
 const { scrapeAndSave, scrapeAndGetContent } = require('./scraper');
+const dayjs = require('dayjs'); // Make sure dayjs is imported
+const customParseFormat = require('dayjs/plugin/customParseFormat'); // Make sure plugin is imported
+dayjs.extend(customParseFormat); // Make sure it's extended
 
 // --- Helper Functions ---
+async function getSourcesForDate(date) {
+    const datePath = path.join(config.scraper.outputBaseDir, date); // Use config for base path
+    try {
+        // Ensure the date directory itself exists before trying to read it
+        await fs.access(datePath); // Check existence using promises
+        const entries = await fs.readdir(datePath, { withFileTypes: true });
+        const sourceDirs = entries
+            .filter(dirent => dirent.isDirectory() && dirent.name !== 'archive') // Filter for directories, exclude 'archive' if present
+            .map(dirent => dirent.name)
+            .sort(); // Sort sources alphabetically
+        return sourceDirs;
+    } catch (error) {
+         if (error.code === 'ENOENT') {
+             console.warn(`   Date directory not found when getting sources: ${datePath}`);
+             return []; // Return empty if the date folder doesn't exist
+         }
+        console.error(`Error reading sources for date ${date}:`, error);
+        return [];
+    }
+}
 
 /** Gets current date as YYYY-MM-DD */
 function getCurrentDateFolder() {
