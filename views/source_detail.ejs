@@ -1,0 +1,54 @@
+<%- include('partials/header', { currentDate: currentDate, availableDates: availableDates, currentSource: currentSource }) %>
+
+    <% if (error) { %>
+        <p class="error-message"><%= error %></p>
+    <% } %>
+
+    <!-- ADDED Optional Links to OTHER sources for the same date -->
+    <%
+       // Check if allSourcesForDate was passed and has more than one source
+       if (locals.allSourcesForDate && allSourcesForDate.length > 1) {
+          const otherSources = allSourcesForDate.filter(s => s !== currentSource);
+    %>
+        <% if (otherSources.length > 0) { %>
+        <div class="sources-section sources-section-top other-sources-nav">
+            <h2>View Other Sources for <%= currentDate %>:</h2>
+            <ul>
+                <% otherSources.forEach(source => { %>
+                    <li><a href="/<%= currentDate %>/<%= source %>"><%= source %></a></li>
+                <% }); %>
+                 <li><a href="/<%= currentDate %>"><strong>View Combined</strong></a></li> <%# Link back to combined %>
+            </ul>
+        </div>
+        <% } %>
+    <% } %>
+    <!-- END ADDED Links -->
+
+
+     <div class="analysis-container">
+        <div class="analysis-column">
+            <h2>Source Digest (<%= currentSource %>)</h2>
+             <% if (digest.found) { %>
+                <div class="markdown-content"><%- digest.content %></div>
+                 <p class="file-info"><em>Source file: <%= digest.fileName %></em></p>
+            <% } else { %>
+                <p>No specific digest found for <strong><%= currentSource %></strong> on this date.</p>
+            <% } %>
+        </div>
+
+        <div class="analysis-column">
+            <h2>Source Essay (<%= currentSource %>)</h2>
+             <% if (essay.found) { %>
+                <div class="markdown-content"><%- essay.content %></div>
+                 <p class="file-info"><em>Source file: <%= essay.fileName %></em></p>
+            <% } else { %>
+                <p>No specific essay found for <strong><%= currentSource %></strong> on this date.</p>
+            <% } %>
+        </div>
+    </div>
+
+    <!-- Optional: Keep back link at bottom or remove if top nav is sufficient -->
+    <!-- <p class="back-link"><a href="/<%= currentDate %>">← Back to Combined Analysis for <%= currentDate %></a></p> -->
+
+
+<%- include('partials/footer') %>

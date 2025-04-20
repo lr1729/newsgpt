@@ -1,0 +1,312 @@
+/* public/css/style.css */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+    background-color: #f8f9fa;
+    color: #343a40;
+}
+
+header {
+    background-color: #343a40;
+    color: #fff;
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap; /* Allow wrapping on small screens */
+    border-bottom: 3px solid #f0a04b; /* Accent color */
+}
+
+header h1 {
+    margin: 0 20px 0 0;
+    font-size: 1.8em;
+    font-weight: 300; /* Lighter weight for header */
+}
+
+header nav {
+    margin-top: 5px;
+}
+
+header nav label {
+    margin-right: 8px;
+    font-size: 0.9em;
+}
+
+header nav select {
+    padding: 8px 12px;
+    font-size: 0.95em;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background-color: #fff;
+}
+
+header h2 {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin: 10px 0 0 0;
+    font-size: 1.1em;
+    color: #dee2e6; /* Lighter text */
+    font-weight: 400;
+    width: 100%; /* Ensure it takes full width if header wraps */
+    text-align: left; /* Align left */
+}
+ header h2 a {
+    color: #f0c08b; /* Lighter accent */
+    text-decoration: none;
+ }
+ header h2 a:hover {
+     text-decoration: underline;
+ }
+
+
+main {
+    max-width: 1200px; /* Wider for side-by-side */
+    margin: 2rem auto;
+    padding: 1.5rem 2rem;
+    background-color: #fff;
+    box-shadow: 0 2px 15px rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+}
+
+.analysis-container {
+    display: flex;
+    flex-wrap: wrap; /* Allow columns to wrap on smaller screens */
+    gap: 2rem; /* Space between columns */
+    margin-bottom: 2rem;
+}
+
+.analysis-column {
+    flex: 1; /* Each column tries to take equal space */
+    min-width: 300px; /* Minimum width before wrapping */
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 5px;
+    padding: 1.5em;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.analysis-column h2 {
+    margin-top: 0; /* Remove top margin inside column */
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #dee2e6;
+    font-size: 1.4em;
+    color: #495057;
+}
+
+.markdown-content {
+    font-family: Georgia, serif; /* Use a serif font for readability */
+    color: #212529;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    margin-top: 1.4em;
+    margin-bottom: 0.6em;
+    line-height: 1.3;
+    font-family: inherit; /* Inherit body font or set specifically */
+    font-weight: 600;
+    color: #343a40;
+}
+ .markdown-content h1 { font-size: 1.8em; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+ .markdown-content h2 { font-size: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 0.3em;}
+ .markdown-content h3 { font-size: 1.25em; }
+ .markdown-content h4 { font-size: 1.1em; }
+
+
+.markdown-content p {
+    margin-bottom: 1.1em;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+    margin-left: 1.8em;
+    margin-bottom: 1.1em;
+    padding-left: 0;
+}
+
+.markdown-content li {
+    margin-bottom: 0.6em;
+}
+
+.markdown-content pre {
+    background-color: #f1f3f5;
+    padding: 1em;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid #dee2e6;
+}
+
+.markdown-content code {
+     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+     font-size: 0.9em;
+     background-color: #e9ecef;
+     padding: 0.2em 0.4em;
+     border-radius: 3px;
+}
+ .markdown-content pre code {
+     background-color: transparent;
+     padding: 0;
+     border: none;
+     font-size: 0.85em; /* Slightly smaller in pre block */
+ }
+
+
+.markdown-content blockquote {
+    border-left: 4px solid #adb5bd;
+    padding-left: 1.2em;
+    margin-left: 0;
+    margin-bottom: 1.1em;
+    color: #495057;
+    font-style: italic;
+}
+
+ .markdown-content a {
+     color: #0d6efd; /* Bootstrap blue */
+     text-decoration: none;
+ }
+  .markdown-content a:hover {
+     text-decoration: underline;
+ }
+
+
+.sources-section { /* Base styles */
+    padding-top: 1rem;
+}
+.sources-section h2 {
+    font-size: 1.2em;
+    border-bottom: none;
+    margin-bottom: 0.8em;
+    margin-top: 0; /* Remove top margin when at top */
+}
+.sources-section ul {
+    list-style: none;
+    padding: 0;
+    margin: 0; /* Remove default margin */
+}
+.sources-section li {
+    display: inline-block;
+    margin-right: 10px; /* Slightly reduce spacing */
+    margin-bottom: 10px;
+}
+.sources-section li a {
+    display: inline-block;
+    padding: 6px 12px; /* Slightly smaller padding */
+    background-color: #e9ecef;
+    color: #495057;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 0.9em;
+    transition: background-color 0.2s ease;
+}
+.sources-section li a:hover {
+    background-color: #ced4da;
+    color: #212529;
+}
+.sources-section li a strong { /* Style the 'View Combined' link */
+    font-weight: 600;
+}
+
+
+/* Styles specific for placing sources section at the top */
+.sources-section-top {
+    margin-top: 0; /* Remove top margin */
+    margin-bottom: 2rem; /* Add space below */
+    padding-top: 0; /* Remove top padding */
+    padding-bottom: 1rem; /* Add some padding below */
+    border-top: none; /* Remove top border */
+    border-bottom: 1px solid #dee2e6; /* Add bottom border instead */
+}
+
+.no-sources-message { /* Style for the message when no sources found */
+    margin-top: 0;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #dee2e6;
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* Adjustments for the source detail page nav */
+.other-sources-nav h2 {
+    font-size: 1.1em; /* Make slightly smaller */
+    margin-bottom: 0.6em;
+}
+
+
+ .error-message {
+     color: #842029; /* Darker red */
+     background-color: #f8d7da;
+     border: 1px solid #f5c2c7;
+     padding: 1rem;
+     border-radius: 4px;
+     margin-bottom: 1.5rem;
+ }
+
+ .file-info {
+     font-size: 0.8em;
+     color: #6c757d; /* Bootstrap secondary color */
+     margin-top: 10px;
+     font-style: italic;
+     text-align: right;
+ }
+
+ .back-link {
+     margin-top: 2rem;
+ }
+ .back-link a {
+     color: #0d6efd;
+     text-decoration: none;
+     font-weight: 500;
+ }
+  .back-link a:hover {
+     text-decoration: underline;
+ }
+
+footer {
+    text-align: center;
+    margin-top: 3rem;
+    padding: 1.5rem;
+    font-size: 0.9em;
+    color: #6c757d;
+    border-top: 1px solid #dee2e6;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    header nav {
+        margin-top: 10px;
+        width: 100%;
+    }
+    header nav select {
+         width: 100%;
+     }
+
+    main {
+        padding: 1rem;
+    }
+    .analysis-container {
+        flex-direction: column; /* Stack columns on smaller screens */
+        gap: 1.5rem;
+    }
+    .analysis-column {
+        padding: 1em;
+    }
+    .sources-section li {
+        margin-right: 8px; /* Adjust spacing for smaller screens */
+        margin-bottom: 8px;
+    }
+     .sources-section li a {
+         padding: 5px 10px;
+     }
+
+}

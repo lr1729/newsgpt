@@ -1,0 +1,51 @@
+<%- include('partials/header', { currentDate: currentDate, availableDates: availableDates, currentSource: null }) %>
+
+    <% if (error) { %>
+        <p class="error-message"><%= error %></p>
+    <% } %>
+
+    <% if (currentDate) { %>
+        <!-- MOVED SOURCE LINKS HERE -->
+        <% if (sources && sources.length > 0) { %>
+            <div class="sources-section sources-section-top"> <%# Added new class %>
+                <h2>View Source-Specific Analysis:</h2>
+                <ul>
+                    <% sources.forEach(source => { %>
+                        <li><a href="/<%= currentDate %>/<%= source %>"><%= source %></a></li>
+                    <% }); %>
+                </ul>
+            </div>
+        <% } else { %>
+             <p class="no-sources-message"><em>No individual source analyses found for this date.</em></p>
+        <% } %>
+        <!-- END MOVED SOURCE LINKS -->
+
+        <div class="analysis-container">
+            <div class="analysis-column">
+                <h2>Daily Digest</h2>
+                <% if (digest.found) { %>
+                    <div class="markdown-content"><%- digest.content %></div>
+                    <p class="file-info"><em>Source file: <%= digest.fileName %></em></p>
+                <% } else { %>
+                    <p><%= digest.content %></p> <%# Shows 'Not found' message %>
+                <% } %>
+            </div>
+
+            <div class="analysis-column">
+                <h2>Analytical Essay</h2>
+                 <% if (essay.found) { %>
+                    <div class="markdown-content"><%- essay.content %></div>
+                     <p class="file-info"><em>Source file: <%= essay.fileName %></em></p>
+                <% } else { %>
+                    <p><%= essay.content %></p> <%# Shows 'Not found' message %>
+                <% } %>
+            </div>
+        </div>
+
+        <!-- REMOVED SOURCE LINKS FROM BOTTOM -->
+
+    <% } else if (!error) { %>
+         <p>Please select a date from the dropdown above to view the analysis.</p>
+    <% } %>
+
+<%- include('partials/footer') %>

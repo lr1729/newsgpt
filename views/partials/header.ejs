@@ -1,0 +1,36 @@
+<!-- views/partials/header.ejs -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Dynamically set title -->
+    <title>
+        <%= locals.currentSource ? `${currentSource} Analysis` : 'Daily News Analysis' %> | <%= currentDate || 'Overview' %>
+    </title>
+    <!-- Link to CSS file in the public directory -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Daily News Analysis</h1>
+        <nav>
+            <label for="date-select">View Analysis For:</label>
+            <select id="date-select" onchange="if (this.value) window.location.href=this.value;">
+                <option value="">-- Select Date --</option>
+                <% availableDates.forEach(date => { %>
+                    <option value="/<%= date %>" <%= currentDate === date ? 'selected' : '' %>>
+                        <%= date %>
+                    </option>
+                <% }); %>
+            </select>
+        </nav>
+         <% if (locals.currentSource) { %> <%# Check if currentSource is defined %>
+            <h2>Source: <%= currentSource %> (<a href="/<%= currentDate %>">View Combined Daily Analysis</a>)</h2>
+        <% } else if (currentDate) { %>
+             <h2>Combined Daily Analysis: <%= currentDate %></h2>
+         <% } else { %>
+             <h2>Welcome</h2>
+         <% } %>
+    </header>
+    <main>
